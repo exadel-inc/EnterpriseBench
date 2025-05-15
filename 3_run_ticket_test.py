@@ -64,7 +64,7 @@ def highest_java() -> str:
     return str(vers)
 
 def jdk_home(major: str) -> Path:
-    for p in JVM_DIR.glob(f"jdk-{major}*"):
+    for p in JVM_DIR.glob(f"*{major}*"):
         javac = p/"bin"/"javac"
         if not javac.exists():
             javac = next((c for c in p.rglob("bin/javac") if c.name=="javac"), javac)
@@ -165,23 +165,25 @@ def write_skip(b: set[tuple[str, str]]):
 
 def load_skip() -> set[tuple[str, str]]:
     """
-    Load the skip list for *TICKET* from pr_states.csv.
-    Exits with an error if the list is missing.
+    Return the skip list for *TICKET* from pr_states.csv.
+    If the ticket is present but the field is empty or just a comment,
+    we simply return an empty set instead of exiting with an error.
     """
     with PR_STATE.open(newline="", encoding="utf-8") as fh:
         for r in csv.DictReader(fh):
-            if r["ticket"] == TICKET:
-                items = (r.get("skip_tests", "") or "").split(",")
-                out: set[tuple[str, str]] = set()
-                for raw in items:
-                    raw = raw.strip()
-                    if raw and "#" in raw:
-                        c, m = raw.split("#", 1)
-                        out.add((c, m))
-                if out:
-                    return out
-                break
-    sys.exit(f"❌  Skip tests not found for ticket {TICKET} in {PR_STATE}")
+            if r["ticket"] != TICKET:
+                continue
+            raw_items = (r.get("skip_tests", "") or "").split(",")
+            out: set[tuple[str, str]] = set()
+            for raw in raw_items:
+                raw = raw.strip()
+                # ignore placeholder comments and malformed entries
+                if not raw or raw.startswith("#") or "#" not in raw:
+                    continue
+                c, m = raw.split("#", 1)
+                out.add((c, m))
+            return out  # empty set means "nothing to skip"
+        sys.exit(f"❌ ticket {TICKET} not found in {PR_STATE}")
 
 def dtest() -> str | None:
     """

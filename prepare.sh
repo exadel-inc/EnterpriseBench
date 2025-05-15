@@ -16,14 +16,95 @@
 
 # Prerequisites: Bash ≥ 4 and “unzip” installed.
 # ------------------------------------------------------------------------------
+# Ensure 'unzip' is present (attempt to install if missing)
+ensure_unzip() {
+  if ! command -v unzip >/dev/null 2>&1; then
+    printf "▶ 'unzip' not found. Attempting to install…\n"
+    if command -v apt-get >/dev/null 2>&1; then
+      sudo apt-get update -y && sudo apt-get install -y unzip
+    elif command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y unzip
+    elif command -v pacman >/dev/null 2>&1; then
+      sudo pacman -Sy --noconfirm unzip
+    elif command -v brew >/dev/null 2>&1; then
+      brew install unzip
+    else
+      printf "❌  Could not detect package manager. Please install 'unzip' manually.\n" >&2
+      exit 1
+    fi
+  fi
+}
+# ------------------------------------------------------------------------------
+# Ensure 'mvn' (Apache Maven) is present (attempt to install if missing)
+ensure_maven() {
+  if ! command -v mvn >/dev/null 2>&1; then
+    printf "▶ 'mvn' not found. Attempting to install…\n"
+    if command -v apt-get >/dev/null 2>&1; then
+      sudo apt-get update -y && sudo apt-get install -y maven
+    elif command -v dnf >/dev/null 2>&1; then
+      sudo dnf install -y maven
+    elif command -v pacman >/dev/null 2>&1; then
+      sudo pacman -Sy --noconfirm maven
+    elif command -v brew >/dev/null 2>&1; then
+      brew install maven
+    else
+      printf "❌  Could not detect package manager. Please install 'maven' manually.\n" >&2
+      exit 1
+    fi
+  fi
+}
+
+ensure_unzip
+ensure_maven
+# ------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Ensure Java SDKs (8, 11, 17) are present
+ensure_java() {
+  if command -v javac >/dev/null 2>&1; then
+    # Check for specific versions; install missing ones
+    MISSING=()
+    for v in 8 11 17; do
+      if ! update-java-alternatives -l 2>/dev/null | grep -q "java-${v}-openjdk"; then
+        MISSING+=("openjdk-${v}-jdk")
+      fi
+    done
+    if (( ${#MISSING[@]} )); then
+      printf "▶ Installing missing JDKs: %s\n" "${MISSING[*]}"
+      sudo apt-get update -y && sudo apt-get install -y "${MISSING[@]}"
+    fi
+  elif command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update -y && sudo apt-get install -y openjdk-8-jdk openjdk-11-jdk openjdk-17-jdk
+  elif command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y java-1.8.0-openjdk-devel java-11-openjdk-devel java-17-openjdk-devel
+  elif command -v pacman >/dev/null 2>&1; then
+    sudo pacman -Sy --noconfirm jdk8-openjdk jdk11-openjdk jdk17-openjdk
+  elif command -v brew >/dev/null 2>&1; then
+    brew install openjdk@8 openjdk@11 openjdk@17
+  else
+    printf "❌  Could not detect package manager to install JDKs.\n" >&2
+    exit 1
+  fi
+}
+ensure_java
+# ---------------------------------------------------------------------------
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Optional auto‑download of the dataset archive
-DATAVERSE_URL="https://dataverse.harvard.edu/api/access/dataset/:persistentId/?persistentId=doi:10.7910/DVN/S4WOTJ"
+# Dataverse “original” format downloads the whole dataset as a single ZIP archive
+DATAVERSE_URL="https://dataverse.harvard.edu/api/access/dataset/:persistentId/?persistentId=doi:10.7910/DVN/S4WOTJ&format=original"
 DOWNLOAD_ZIP="dataverse_files.zip"
 
 if [[ ! -f $DOWNLOAD_ZIP ]]; then
-  printf "▶ Downloading dataverse archive to %s\n" "$DOWNLOAD_ZIP"
-  curl -L -o "$DOWNLOAD_ZIP" "$DATAVERSE_URL"
+  printf "▶ Downloading dataverse archive to %s (this may take a while…)\n" "$DOWNLOAD_ZIP"
+  TMP_FILE="${DOWNLOAD_ZIP}.part"
+  # Follow redirects, fail on HTTP errors, show progress, and retry on transient issues
+  if ! curl --location --fail --progress-bar --retry 3 --retry-delay 5 \
+            --output "$TMP_FILE" "$DATAVERSE_URL"; then
+    echo "❌  Download failed. Please check your Internet connection or download the file manually:"
+    echo "    $DATAVERSE_URL"
+    exit 1
+  fi
+  mv -f "$TMP_FILE" "$DOWNLOAD_ZIP"
 fi
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -38,17 +119,27 @@ else
   INPUT=$DOWNLOAD_ZIP          # default to the freshly downloaded archive
 fi
 
-# 1. Unzip the top-level archive if needed
+# 1. Unzip the top‑level archive only if the target directory is missing or empty
 if [[ $INPUT == *.zip ]]; then
   ROOT_DIR=${INPUT%.zip}       # strip trailing “.zip”
-  printf "▶ Unzipping %s to %s/\n" "$INPUT" "$ROOT_DIR"
-  rm -rf "$ROOT_DIR"
-  mkdir -p "$ROOT_DIR"
-  unzip -q "$INPUT" -d "$ROOT_DIR"
+  if [[ -d $ROOT_DIR && $(ls -A "$ROOT_DIR" 2>/dev/null) ]]; then
+    printf "▶ %s already exists – skipping all extraction & rename steps.\n" "$ROOT_DIR"
+    exit 0
+  else
+    printf "▶ Unzipping %s to %s/\n" "$INPUT" "$ROOT_DIR"
+    rm -rf "$ROOT_DIR"
+    mkdir -p "$ROOT_DIR"
+    unzip -q "$INPUT" -d "$ROOT_DIR"
+  fi
 elif [[ -d $INPUT ]]; then
   ROOT_DIR=$INPUT
+  if [[ $(ls -A "$ROOT_DIR" 2>/dev/null) ]]; then
+    printf "▶ %s already exists – skipping all extraction & rename steps.\n" "$ROOT_DIR"
+    exit 0
+  fi
 else
-  printf "❌  %s is neither a directory nor a .zip file\n" "$INPUT" >&2; exit 1
+  printf "❌  %s is neither a directory nor a .zip file\n" "$INPUT" >&2
+  exit 1
 fi
 
 # 2-4. Walk each project directory and apply the transformations
@@ -56,6 +147,11 @@ for PROJECT_DIR in "$ROOT_DIR"/*/; do
   [[ ! -d $PROJECT_DIR ]] && continue
   printf "\n◆ Processing %s\n" "${PROJECT_DIR%/}"
   pushd "$PROJECT_DIR" >/dev/null
+
+  # Symlink the system JDK directory (/usr/lib/jvm) as "jvm" for this project
+  if [[ -d /usr/lib/jvm ]]; then
+    ln -sfn /usr/lib/jvm jvm
+  fi
 
   # 2. Rename *.csv → pr_states.csv
   for CSV in *.csv; do
@@ -73,6 +169,7 @@ for PROJECT_DIR in "$ROOT_DIR"/*/; do
       mkdir -p "$TARGET"
       unzip -q "$ZIP" -d "$TARGET"
       rm -rf "$TARGET"/__MACOSX               # drop macOS metadata dirs
+      find "$TARGET" -name '._*' -type f -delete   # remove AppleDouble resource‑fork files
 
       # ── Flatten one superfluous level (e.g., patches_neg/patches_neg‑EAK/*) ──
       if [[ $(find "$TARGET" -mindepth 1 -maxdepth 1 -type d | wc -l) -eq 1 ]] && \
@@ -95,6 +192,7 @@ for PROJECT_DIR in "$ROOT_DIR"/*/; do
     mkdir -p project_repo
     unzip -q "$ZIP" -d project_repo
     rm -rf project_repo/__MACOSX               # remove macOS cruft
+    find project_repo -name '._*' -type f -delete       # remove AppleDouble resource‑fork files
 
     # ── Flatten one unnecessary top‑level directory ──
     if [[ $(find project_repo -mindepth 1 -maxdepth 1 -type d | wc -l) -eq 1 ]] && \

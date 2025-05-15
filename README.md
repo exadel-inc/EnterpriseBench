@@ -51,11 +51,16 @@ The script will download the Harvard Dataverse archive, create the correct folde
 
 The script will:
 
-1. Download the Harvard Dataverse archive (DOI [10.7910/DVN/S4WOTJ](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/S4WOTJ)) if it is not already present in the working directory.
-2. Extract it into a clean `dataverse_files/` directory.
-3. Rename each dataset `*.csv` file to **`pr_states.csv`**.
-4. Unpack the `patches_neg*` and `patches_pos*` archives into flat `patches_neg/` and `patches_pos/` folders.
-5. Unzip and flatten every project repository archive into a **`project_repo/`** directory.
+1. Install **unzip**, **Maven** and Java SDK 8 / 11 / 17 if they are missing (Ubuntu/Debian‑based systems only; other distros print a hint).
+2. Download the Harvard Dataverse archive (DOI [10.7910/DVN/S4WOTJ](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/S4WOTJ)) if `dataverse_files.zip` is not already present.
+3. Extract the archive into a clean `dataverse_files/` directory – *unless that folder already exists and is non‑empty, in which case the script skips all extraction & rename work*.
+4. Inside every project subfolder it  
+   • renames `*.csv` → **`pr_states.csv`**  
+   • unpacks `patches_neg*`/`patches_pos*` ZIPs into flat `patches_neg/` and `patches_pos/` folders  
+   • unzips the main repo archive into a flat **`project_repo/`** folder  
+   • creates a `jvm` symlink pointing to `/usr/lib/jvm` (so the benchmark finds all installed JDKs).
+
+Re‑running the script is idempotent: it detects an existing `dataverse_files/` directory and exits without touching your data or reinstalling the JDKs.
 
 After the script finishes, point `--project-root` at one of the unpacked project sub‑folders (e.g., `dataverse_files/CompreFace`) and jump straight to the [Running the Benchmark](#running-the-benchmark) section.
 
@@ -136,3 +141,4 @@ Results are written to `results/` (created automatically) as JSON and CSV summar
 ## License
 
 Distributed under the Apache 2.0 license – see `LICENSE` for details.
+</file>
