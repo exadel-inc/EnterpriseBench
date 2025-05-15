@@ -5,39 +5,45 @@ Run Java tests for a PR ticket
 Base  ➜  Merge  ➜  (merge + neg-patch)  ➜  (merge + neg-patch + code-patch)
 
 Only tests that are *green* on both base & merge influence the verdict on
-negative / code patches (skip-file logic).
+negative / code patches (skip-list logic).
+The skip list for each ticket is stored persistently in `pr_states.csv`
+(column `skip_tests`).
 
 Every Maven run is logged to  mvn-logs/<TICKET>_<stage>_<timestamp>.log
 
-By default this script runs the full flow (base+merge then patches).  
-Pass --ai to skip the base+merge steps and re-use the skip-list
-previously generated in skipped_tests/<TICKET>_skip-tests.txt.
+By default this script runs the full flow (base → merge → patches).
+Pass `--ai` to skip the base+merge steps and re‑use the skip list already
+recorded in `pr_states.csv`.
 """
 from __future__ import annotations
 import argparse, csv, datetime as dt, os, re, shutil, subprocess, sys, xml.etree.ElementTree as ET
 from pathlib import Path
+
+csv.field_size_limit(sys.maxsize)
 
 # ──────────────────────── CLI ─────────────────────────────────
 parser = argparse.ArgumentParser()
 parser.add_argument("ticket", help="PR ticket ID")
 parser.add_argument("patch", nargs="?", help="Optional code-patch diff")
 parser.add_argument("--ai", action="store_true",
-                    help="Skip base+merge, only run neg+code using saved skip-file")
+                    help="Skip base+merge, only run neg+code using skip list from pr_states.csv")
+parser.add_argument("--project-root", type=Path,
+                    help="Root directory of the benchmark project (defaults to this script's folder)")
+parser.add_argument("--java-major", type=int, metavar="N",
+                    help="Force Java major version (e.g., 8, 17) instead of auto‑detect")
 args = parser.parse_args()
 
 TICKET        = args.ticket
-OPT_PATCH_STR = args.patch
+PATCH_STR = args.patch
 AI_MODE   = args.ai
 
 # ───────────────────── PATHS / CONSTS ─────────────────────────
-ROOT       = Path(__file__).parent.resolve()
-REPO       = ROOT / "edmb-backend"
+ROOT       = Path(args.project_root or Path(__file__).parent).expanduser().resolve()
+REPO       = (ROOT / "project_repo").resolve()
 PATCH_NEG  = ROOT / "patches_neg"  / f"{TICKET}_non_test.diff"
-PATCH_POS  = ROOT / "patches_pos"
 PR_STATE   = ROOT / "pr_states.csv"
 LOG_DIR    = ROOT / "mvn-logs";     LOG_DIR.mkdir(exist_ok=True)
 JVM_DIR    = ROOT / "jvm"
-SKIP_DIR   = ROOT / "skipped_tests"; SKIP_DIR.mkdir(exist_ok=True)
 
 # ────────── Java detection ───────────────────────────────────
 TAG_RGX = [
@@ -66,18 +72,11 @@ def jdk_home(major: str) -> Path:
             return javac.parent.parent.resolve()
     raise FileNotFoundError(f"JDK {major} not found under {JVM_DIR}")
 
-JAVA_MAJOR = highest_java()
+JAVA_MAJOR = str(args.java_major or highest_java())
 JAVA_HOME  = jdk_home(JAVA_MAJOR)
 print(f"ℹ️  Java {JAVA_MAJOR}  →  {JAVA_HOME}")
 
-# ────────── helper functions ──────────────────────────────────
-def resolve_patch(p: str|None) -> Path|None:
-    if not p: return None
-    q = Path(p)
-    if q.is_absolute() and q.exists(): return q
-    q = PATCH_POS / q.name
-    return q if q.exists() else None
-CODE_PATCH = resolve_patch(OPT_PATCH_STR)
+CODE_PATCH = ROOT / PATCH_STR
 
 def read_commits(key: str) -> tuple[str, str]:
     with PR_STATE.open() as fh:
@@ -131,54 +130,125 @@ def red_tests() -> set[tuple[str,str]]:
             pass
     return bad
 
-def write_skip(b: set[tuple[str,str]]):
-    lines = ["# auto-generated – union of red tests on base & merge"]
-    lines += [f"{c}#{m}" for c,m in sorted(b)]
-    (SKIP_DIR / f"{TICKET}_skip-tests.txt").write_text("\n".join(lines), encoding="utf-8")
+# ────────── skip‑list persistence ────────────────────────────
+def write_skip(b: set[tuple[str, str]]):
+    """
+    Persist the union of red tests as a comma‑separated list in the
+    `skip_tests` column of pr_states.csv (one row per ticket).
+    The column is created automatically if missing.
+    """
+    # read entire CSV
+    rows: list[dict[str, str]] = []
+    with PR_STATE.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        fieldnames = reader.fieldnames or []
+        for r in reader:
+            rows.append(r)
 
-def load_skip() -> set[tuple[str,str]]:
-    path = SKIP_DIR / f"{TICKET}_skip-tests.txt"
-    if not path.exists():
-        sys.exit(f"❌  Skip file not found: {path}")
-    out = set()
-    for ln in path.read_text(encoding="utf-8").splitlines():
-        ln = ln.strip()
-        if not ln or ln.startswith("#"): continue
-        c,m = ln.split("#",1)
-        out.add((c,m))
-    return out
+    # ensure the column exists
+    if "skip_tests" not in fieldnames:
+        fieldnames.append("skip_tests")
 
-def dtest() -> str|None:
-    path = SKIP_DIR / f"{TICKET}_skip-tests.txt"
-    if not path.exists(): return None
-    pats = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()
-            if ln.strip() and not ln.startswith("#")]
-    if not pats: return None
-    return "-Dtest=" + ",".join(["*"] + [f"!{p}" for p in pats])
+    # update the row for this ticket
+    for r in rows:
+        if r["ticket"] == TICKET:
+            r["skip_tests"] = ",".join(f"{c}#{m}" for c, m in sorted(b))
+            break
+    else:
+        sys.exit(f"❌ ticket {TICKET} not found in {PR_STATE}")
+
+    # write back
+    with PR_STATE.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+def load_skip() -> set[tuple[str, str]]:
+    """
+    Load the skip list for *TICKET* from pr_states.csv.
+    Exits with an error if the list is missing.
+    """
+    with PR_STATE.open(newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            if r["ticket"] == TICKET:
+                items = (r.get("skip_tests", "") or "").split(",")
+                out: set[tuple[str, str]] = set()
+                for raw in items:
+                    raw = raw.strip()
+                    if raw and "#" in raw:
+                        c, m = raw.split("#", 1)
+                        out.add((c, m))
+                if out:
+                    return out
+                break
+    sys.exit(f"❌  Skip tests not found for ticket {TICKET} in {PR_STATE}")
+
+def dtest() -> str | None:
+    """
+    Build the -Dtest exclusion filter based on the skip list already
+    recorded in pr_states.csv. Returns None if no skip list yet.
+    """
+    skip: set[tuple[str, str]] = set()
+    with PR_STATE.open(newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            if r["ticket"] == TICKET:
+                items = (r.get("skip_tests", "") or "").split(",")
+                skip = set()
+                for raw in items:
+                    raw = raw.strip()
+                    if raw and "#" in raw:
+                        c, m = raw.split("#", 1)
+                        skip.add((c, m))
+                break
+    if not skip:
+        return None
+    return "-Dtest=" + ",".join(["*"] + [f"!{c}#{m}" for c, m in sorted(skip)])
 
 # ────────── Maven runner ──────────────────────────────────────
-def run(stage: str) -> tuple[int, dict[str,int]]:
+def run(stage: str) -> tuple[int, dict[str, int]]:
     clean_targets()
-    cmd = [
-        "mvn", "-q", "-B", "clean", "test",
+
+    # 1) full install (compile + package) without running tests
+    install_log = LOG_DIR / f"{TICKET}_{stage}_install_{dt.datetime.now():%Y%m%d_%H%M%S}.log"
+    install_cmd = [
+        "mvn", "-B", "clean", "install",
+        "-DskipTests=true",
+        "-Dcheckstyle.skip=true",
         "-f", mvn_pom(),
-        "-DfailIfNoTests=false",
-        "-Dcheckstyle.skip=true"
     ]
-    if (flt := dtest()):
-        cmd.append(flt)
     env = os.environ.copy()
     env["JAVA_HOME"] = str(JAVA_HOME)
     env["PATH"]      = f"{JAVA_HOME/'bin'}{os.pathsep}{env['PATH']}"
-    ts  = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log = LOG_DIR / f"{TICKET}_{stage}_{ts}.log"
-    print(f"▶️ {stage}: JAVA_HOME={JAVA_HOME} PATH={JAVA_HOME/'bin'}:$PATH " + " ".join(cmd))
-    res = subprocess.run(cmd, cwd=REPO, text=True,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
-    log.write_text(res.stdout)
+
+    print(f"▶️ {stage} install: JAVA_HOME={JAVA_HOME} PATH={JAVA_HOME/'bin'}:$PATH " + " ".join(install_cmd))
+    res_i = subprocess.run(install_cmd, cwd=REPO, text=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+    install_log.write_text(res_i.stdout)
+    if res_i.returncode != 0:
+        print(f"[{stage} install] failed → {install_log.name}")
+        # abort early if install fails
+        return res_i.returncode, dict(run=0, failures=0, errors=0, skipped=0)
+    print(f"[{stage} install] succeeded → {install_log.name}")
+
+    # 2) now run tests (using any skip‐file filter)
+    test_log = LOG_DIR / f"{TICKET}_{stage}_test_{dt.datetime.now():%Y%m%d_%H%M%S}.log"
+    test_cmd = [
+        "mvn", "-B", "test",
+        "-DfailIfNoTests=false",
+        "-Dcheckstyle.skip=true",
+        "-f", mvn_pom(),
+    ]
+    if (flt := dtest()):
+        test_cmd.append(flt)
+
+    print(f"▶️ {stage} test: JAVA_HOME={JAVA_HOME} PATH={JAVA_HOME/'bin'}:$PATH " + " ".join(test_cmd))
+    res_t = subprocess.run(test_cmd, cwd=REPO, text=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+    test_log.write_text(res_t.stdout)
+
     stats = surefire_stats()
-    print(f"[{stage}] run:{stats['run']} fail:{stats['failures']} err:{stats['errors']} skip:{stats['skipped']} → {log.name}")
-    return res.returncode, stats
+    print(f"[{stage}] run:{stats['run']} fail:{stats['failures']} err:{stats['errors']} skip:{stats['skipped']} → {test_log.name}")
+    return res_t.returncode, stats
 
 def apply_patch(p: Path) -> bool:
     return subprocess.run(["git","apply","--ignore-whitespace", str(p)], cwd=REPO).returncode == 0

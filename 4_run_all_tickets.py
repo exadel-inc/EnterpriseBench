@@ -4,7 +4,7 @@ Run 3_run_ticket_test.py for every ticket found in *pr_states.csv*,
 store one CSV per ticket and finally merge everything into *test_results.csv*.
 
 Supports two modes:
-  1) Default: process tickets from pr_states.csv (optionally bounded by --start/--end)
+  1) Default: process tickets from pr_states.csv
      and run each through 3_run_ticket_test.py.
   2) --ai: **requires** --ai-patches-dir, reads a previous results CSV
      (via --filter-csv), picks only those with neg_status FAIL and code_status PASS,
@@ -19,13 +19,30 @@ import subprocess
 import sys
 from pathlib import Path
 
+csv.field_size_limit(sys.maxsize)
+
+# ──────────────────────── CLI ─────────────────────────────────
+parser = argparse.ArgumentParser()
+mode = parser.add_mutually_exclusive_group()
+parser.add_argument("--project-root", type=Path,
+                    help="Root directory of the benchmark project (defaults to this script's folder)")
+parser.add_argument("--java-major", type=int, metavar="N",
+                    help="Pass through to ticket tests to force Java version (e.g., 8, 17)")
+mode.add_argument("--ai", action="store_true",
+                  help="run tests on tickets that use AI-generated patches")
+parser.add_argument("--ai-patches-dir", type=Path,
+                    help="(ai) directory of non_test.diff files (required with --ai)")
+args = parser.parse_args()
+
+PROJECT_ROOT = Path(args.project_root or Path(__file__).parent).expanduser().resolve()
+
 # ───────────────────────── settings ──────────────────────────
-CSV_FILE     = "pr_states.csv"
-DEFAULT_PATCHES_DIR  = Path("patches_pos")
-SCRIPT       = "3_run_ticket_test.py"
-RESULTS_DIR  = Path("results_csv")
-LOGS_DIR     = RESULTS_DIR / "logs"
-MERGED_CSV   = "test_results.csv"
+CSV_FILE            = PROJECT_ROOT / "pr_states.csv"
+DEFAULT_PATCHES_DIR = PROJECT_ROOT / "patches_pos"
+SCRIPT              = "3_run_ticket_test.py"
+RESULTS_DIR         = PROJECT_ROOT / "results"
+LOGS_DIR            = RESULTS_DIR / "logs"
+MERGED_CSV          = PROJECT_ROOT / "test_results.csv"
 
 RESULTS_DIR.mkdir(exist_ok=True)
 LOGS_DIR.mkdir(exist_ok=True)
@@ -59,10 +76,50 @@ def ticket_num(key: str) -> int:
     m = re.search(r"(\d+)", key)
     return int(m.group(1)) if m else -1
 
+def find_patch_file(ticket: str, directory: Path) -> Path | None:
+    """
+    Locate a patch file for *ticket* inside *directory*.
+
+    Search order:
+      1. Any filename that contains the **full ticket key** (e.g. ``EAK-76``).
+      2. Fallback: filenames that contain just the **numeric part** of the ticket
+         (e.g. ``76``).
+         This lets a patch like ``acme-inc__compreface_76.patch`` match ticket
+         ``EAK-76`` while avoiding collisions with ``EAK-176``.
+
+    Accepted extensions are ``.diff`` or ``.patch`` (case‑insensitive).
+    If multiple matches exist, the first one in *sorted order* is chosen.
+    Returns ``None`` when nothing matches.
+    """
+    patterns: list[str] = [f"*{ticket}*.diff", f"*{ticket}*.patch"]
+
+    # Extract numeric part (first run of digits) and add fallback patterns
+    m = re.search(r"(\d+)", ticket)
+    if m:
+        num = m.group(1)
+        patterns += [f"*{num}*.diff", f"*{num}*.patch"]
+
+    matches: list[Path] = []
+    seen: set[Path] = set()
+    for pat in patterns:
+        for p in sorted(directory.glob(pat)):
+            if p not in seen:
+                matches.append(p)
+                seen.add(p)
+
+    if not matches:
+        return None
+    if len(matches) > 1:
+        print(f"⚠️  {ticket}: multiple patches found, using {matches[0].name}")
+    return matches[0]
+
 # ─────────── run single ticket ───────────────────────────────
 def run_ticket(ticket: str, patches_dir: Path, ai: bool) -> dict | None:
     patch_file = patches_dir / f"{ticket}_non_test.diff"
-    if not patch_file.exists():
+    if ai:
+        patch_file = find_patch_file(ticket, patches_dir)
+
+    if patch_file is None:
         print(f"❌  {ticket}: patch not found in {patches_dir}")
         return None
 
@@ -75,6 +132,9 @@ def run_ticket(ticket: str, patches_dir: Path, ai: bool) -> dict | None:
     cmd = ["python3", SCRIPT]
     if ai:
         cmd.append("--ai")
+    if args.java_major:
+        cmd += ["--java-major", str(args.java_major)]
+    cmd += ["--project-root", str(PROJECT_ROOT)]
     cmd += [ticket, str(patch_file)]
 
     print(f"▶️  {ticket} ({'ai' if ai else 'full'})")
@@ -133,7 +193,7 @@ def merge_results() -> None:
     rows: list[dict] = []
     fields: set[str] = set()
     for f in RESULTS_DIR.glob("*.csv"):
-        if f.name == MERGED_CSV:
+        if f.name == MERGED_CSV.name:
             continue
         for row in csv.DictReader(f.open()):
             rows.append(row)
@@ -149,49 +209,24 @@ def merge_results() -> None:
 
 # ─────────────────────────── CLI entry-point ─────────────────────────────
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    mode = ap.add_mutually_exclusive_group()
-    mode.add_argument("--ai", action="store_true",
-                      help="only retry tickets from filter-CSV where neg=FAIL & code=PASS")
-    mode.add_argument("--start", type=int, help="process tickets ≥ this number")
-    ap.add_argument("--end", type=int, help="process tickets ≤ this number")
-    ap.add_argument("--filter-csv", type=Path,
-                    help="(ai) CSV to read previous results from")
-    ap.add_argument("--ai-patches-dir", type=Path,
-                    help="(ai) directory of non_test.diff files (required with --ai)")
-    args = ap.parse_args()
-
     # validate ai arguments
     if args.ai:
-        if args.start is not None or args.end is not None:
-            sys.exit("❌  --start/--end cannot be used with --ai")
         if not args.ai_patches_dir:
             sys.exit("❌  --ai-patches-dir is required when using --ai")
-        if not args.filter_csv:
-            sys.exit("❌  --filter-csv is required when using --ai")
-        patches_dir = args.ai_patches_dir
+        patches_dir = Path(args.ai_patches_dir)
+        # If the user passed a *relative* path, resolve it under PROJECT_ROOT
+        if not patches_dir.is_absolute():
+            patches_dir = PROJECT_ROOT / patches_dir
     else:
         patches_dir = DEFAULT_PATCHES_DIR
 
+    # ────────── collect tickets ────────────────────────────────
     tickets: list[str] = []
-    if args.ai:
-        # read the filter-CSV and pick only neg==FAIL & code==PASS
-        with open(args.filter_csv) as fh:
-            for row in csv.DictReader(fh):
-                if row.get("neg_status") == "FAIL" and row.get("code_status") == "PASS":
-                    tickets.append(row["ticket"])
-    else:
-        # normal: read pr_states.csv within optional numeric bounds
-        with open(CSV_FILE) as fh:
-            for row in csv.DictReader(fh):
-                t = row.get("ticket","").strip()
-                if not t:
-                    continue
-                n = ticket_num(t)
-                if args.start is not None and n < args.start:
-                    continue
-                if args.end   is not None and n > args.end:
-                    continue
+    source_csv = CSV_FILE
+    with open(source_csv) as fh:
+        for row in csv.DictReader(fh):
+            t = row.get("ticket", "").strip()
+            if t:
                 tickets.append(t)
 
     for ticket in tickets:
