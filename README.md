@@ -51,9 +51,9 @@ The script will download the Harvard Dataverse archive, create the correct folde
 
 The script will:
 
-1. Install **unzip**, **Maven** and Java SDK 8 / 11 / 17 if they are missing (Ubuntu/Debian‑based systems only; other distros print a hint).
-2. Download the Harvard Dataverse archive (DOI [10.7910/DVN/S4WOTJ](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/S4WOTJ)) if `dataverse_files.zip` is not already present.
-3. Extract the archive into a clean `dataverse_files/` directory – *unless that folder already exists and is non‑empty, in which case the script skips all extraction & rename work*.
+1. Install **unzip**, **Maven** and Java SDK 8 / 11 / 17 if they are missing (Ubuntu/Debian‑based systems only; other distros print a hint).
+2. Download the Harvard Dataverse archive (DOI [10.7910/DVN/S4WOTJ](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/S4WOTJ)) if `dataverse_files.zip` is not already present.
+3. Extract the archive into a clean `dataverse_files/` directory – *unless that folder already exists and is non‑empty, in which case the script skips all extraction & rename work*.
 4. Inside every project subfolder it  
    • renames `*.csv` → **`pr_states.csv`**  
    • unpacks `patches_neg*`/`patches_pos*` ZIPs into flat `patches_neg/` and `patches_pos/` folders  
