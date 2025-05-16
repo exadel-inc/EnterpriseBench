@@ -103,6 +103,9 @@ def find_patch_file(ticket: str, directory: Path) -> Path | None:
     seen: set[Path] = set()
     for pat in patterns:
         for p in sorted(directory.glob(pat)):
+            # Skip macOS resource‑fork files (AppleDouble)
+            if p.name.startswith("._"):
+                continue
             if p not in seen:
                 matches.append(p)
                 seen.add(p)
