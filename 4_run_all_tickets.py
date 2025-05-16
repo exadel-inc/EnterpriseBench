@@ -202,6 +202,11 @@ def merge_results() -> None:
             rows.append(row)
             fields.update(row.keys())
     if rows:
+        def row_key(row: dict) -> int:
+            # Use ticket_num for sorting, fallback to -1
+            return ticket_num(row.get("ticket", ""))
+
+        rows.sort(key=row_key, reverse=True)       # descending order
         with open(MERGED_CSV, "w", newline="") as out:
             writer = csv.DictWriter(out, fieldnames=sorted(fields))
             writer.writeheader()
