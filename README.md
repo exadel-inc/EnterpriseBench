@@ -90,11 +90,41 @@ project_root/
 
 ## Running the Benchmark
 
-`4_run_all_tickets.py` processes *every* row in `pr_states.csv`:
+`4_run_all_tickets.py` processes *every* row in `pr_states.csv`
 
 ```bash
-# Run the script
-$ python3 4_run_all_tickets.py --ai --ai-patches-dir /path/to/patches_neg --project_root /path/to/benchmark/project_root
+# Run the script for AI agent patches
+$ python3 4_run_all_tickets.py --ai --ai-patches-dir /path/to/ai_patches --project_root /path/to/benchmark/project_root
+```
+
+#### Examples with the public *dataverse_files/* dataset
+
+The following commands apply your AI‑generated patch sets to each of the three benchmark projects that ship in the Harvard Dataverse archive.  
+Adjust the `--ai-patches-dir` argument to point at the directory that contains your `<ticket>_non_test.diff` files.
+
+```bash
+# 1) AuthoringToolKit — this repo must be built with Java 8
+python3 4_run_all_tickets.py \
+  --project-root ./dataverse_files/AuthoringToolKit \
+  --java-major 8 \
+  --ai \
+  --ai-patches-dir PATCHES_EAK_TDD_DEEPSEEK_mSWE_AGENT_CL2
+```
+
+```bash
+# 2) CompreFace
+python3 4_run_all_tickets.py \
+  --project-root ./dataverse_files/CompreFace \
+  --ai \
+  --ai-patches-dir PATCHES_CF_classic_GPT_4o_MINI_mSWE_AGENT_CL_1
+```
+
+```bash
+# 3) DynamicMailboxes
+python3 4_run_all_tickets.py \
+  --project-root ./dataverse_files/DynamicMailboxes \
+  --ai \
+  --ai-patches-dir PATCHES_DMB_classic_GPT_4o_MINI_mSWE_AGENT_CL_1
 ```
 
 ### Command‑line flags
