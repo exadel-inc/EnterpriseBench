@@ -16,18 +16,26 @@
 
 # Prerequisites: Bash ≥ 4 and “unzip” installed.
 # ------------------------------------------------------------------------------
+maybe_sudo() {
+  if [[ $EUID -ne 0 ]]; then
+    sudo "$@"
+  else
+    "$@"
+  fi
+}
+
 # Ensure 'unzip' is present (attempt to install if missing)
 ensure_unzip() {
   if ! command -v unzip >/dev/null 2>&1; then
     printf "▶ 'unzip' not found. Attempting to install…\n"
     if command -v apt-get >/dev/null 2>&1; then
-      sudo apt-get update -y && sudo apt-get install -y unzip
+      maybe_sudo apt-get update -y && maybe_sudo apt-get install -y unzip
     elif command -v dnf >/dev/null 2>&1; then
-      sudo dnf install -y unzip
+      maybe_sudo dnf install -y unzip
     elif command -v pacman >/dev/null 2>&1; then
-      sudo pacman -Sy --noconfirm unzip
+      maybe_sudo pacman -Sy --noconfirm unzip
     elif command -v brew >/dev/null 2>&1; then
-      brew install unzip
+      maybe_sudo brew install unzip
     else
       printf "❌  Could not detect package manager. Please install 'unzip' manually.\n" >&2
       exit 1
@@ -39,18 +47,11 @@ ensure_unzip() {
 ensure_maven() {
   if ! command -v mvn >/dev/null 2>&1; then
     printf "▶ 'mvn' not found. Attempting to install…\n"
-    if command -v apt-get >/dev/null 2>&1; then
-      sudo apt-get update -y && sudo apt-get install -y maven
-    elif command -v dnf >/dev/null 2>&1; then
-      sudo dnf install -y maven
-    elif command -v pacman >/dev/null 2>&1; then
-      sudo pacman -Sy --noconfirm maven
-    elif command -v brew >/dev/null 2>&1; then
-      brew install maven
-    else
-      printf "❌  Could not detect package manager. Please install 'maven' manually.\n" >&2
-      exit 1
-    fi
+    # Install Maven 3.6.3 manually
+    mkdir -p /opt
+    curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.6.3/binaries/apache-maven-3.6.3-bin.tar.gz | tar -xz -C /opt
+    maybe_sudo ln -s /opt/apache-maven-3.6.3 /opt/maven
+    maybe_sudo ln -s /opt/maven/bin/mvn /usr/bin/mvn
   fi
 }
 
@@ -70,16 +71,16 @@ ensure_java() {
     done
     if (( ${#MISSING[@]} )); then
       printf "▶ Installing missing JDKs: %s\n" "${MISSING[*]}"
-      sudo apt-get update -y && sudo apt-get install -y "${MISSING[@]}"
+      maybe_sudo apt-get update -y && maybe_sudo apt-get install -y "${MISSING[@]}"
     fi
   elif command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update -y && sudo apt-get install -y openjdk-8-jdk openjdk-11-jdk openjdk-17-jdk
+    maybe_sudo apt-get update -y && maybe_sudo apt-get install -y openjdk-8-jdk openjdk-11-jdk openjdk-17-jdk
   elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y java-1.8.0-openjdk-devel java-11-openjdk-devel java-17-openjdk-devel
+    maybe_sudo dnf install -y java-1.8.0-openjdk-devel java-11-openjdk-devel java-17-openjdk-devel
   elif command -v pacman >/dev/null 2>&1; then
-    sudo pacman -Sy --noconfirm jdk8-openjdk jdk11-openjdk jdk17-openjdk
+    maybe_sudo pacman -Sy --noconfirm jdk8-openjdk jdk11-openjdk jdk17-openjdk
   elif command -v brew >/dev/null 2>&1; then
-    brew install openjdk@8 openjdk@11 openjdk@17
+    maybe_sudo brew install openjdk@8 openjdk@11 openjdk@17
   else
     printf "❌  Could not detect package manager to install JDKs.\n" >&2
     exit 1
@@ -119,6 +120,13 @@ else
   INPUT=$DOWNLOAD_ZIP          # default to the freshly downloaded archive
 fi
 
+if [[ $INPUT == *.zip ]]; then
+  if ! unzip -t "$INPUT" >/dev/null 2>&1; then
+    echo "❌ Invalid or corrupted zip file: $INPUT" >&2
+    exit 1
+  fi
+fi
+
 # 1. Unzip the top‑level archive only if the target directory is missing or empty
 if [[ $INPUT == *.zip ]]; then
   ROOT_DIR=${INPUT%.zip}       # strip trailing “.zip”
@@ -150,7 +158,7 @@ for PROJECT_DIR in "$ROOT_DIR"/*/; do
 
   # Symlink the system JDK directory (/usr/lib/jvm) as "jvm" for this project
   if [[ -d /usr/lib/jvm ]]; then
-    ln -sfn /usr/lib/jvm jvm
+    maybe_sudo ln -sfn /usr/lib/jvm jvm
   fi
 
   # 2. Rename *.csv → pr_states.csv
