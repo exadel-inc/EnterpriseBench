@@ -9,6 +9,13 @@ Supports two modes:
   2) --ai: **requires** --ai-patches-dir, reads a previous results CSV
      (via --filter-csv), picks only those with neg_status FAIL and code_status PASS,
      then invokes 3_run_ticket_test.py --ai using the new patches dir.
+
+When --ai and --ai-patches-dir point to a directory that *itself* contains
+multiple sub‑directories (each holding .diff/.patch files), the script now
+treats every immediate child directory as an independent *patch set*.
+It collects per‑ticket CSVs as before, but after each patch‑set run it merges
+only those files into a dedicated **test_results__<patch‑set>.csv**
+(or plain *test_results.csv* for the default set).
 """
 from __future__ import annotations
 
@@ -117,7 +124,9 @@ def find_patch_file(ticket: str, directory: Path) -> Path | None:
     return matches[0]
 
 # ─────────── run single ticket ───────────────────────────────
-def run_ticket(ticket: str, patches_dir: Path, ai: bool) -> dict | None:
+def run_ticket(ticket: str, patches_dir: Path, ai: bool, label: str = "") -> dict | None:
+    # Optional suffix to distinguish multiple patch sets
+    suffix = f"__{label}" if label else ""
     patch_file = patches_dir / f"{ticket}_non_test.diff"
     if ai:
         patch_file = find_patch_file(ticket, patches_dir)
@@ -143,7 +152,7 @@ def run_ticket(ticket: str, patches_dir: Path, ai: bool) -> dict | None:
     print(f"▶️  {ticket} ({'ai' if ai else 'full'})")
     res = subprocess.run(cmd, capture_output=True, text=True)
     output = f"{res.stdout}\n{res.stderr}"
-    (LOGS_DIR / f"{ticket}.txt").write_text(output, encoding="utf-8")
+    (LOGS_DIR / f"{ticket}{suffix}.txt").write_text(output, encoding="utf-8")
 
     run_stats    = parse_run_lines(output)
     summary      = parse_summary(output)
@@ -183,7 +192,7 @@ def run_ticket(ticket: str, patches_dir: Path, ai: bool) -> dict | None:
         "code_applied": code_flag,
     }
 
-    with (RESULTS_DIR / f"{ticket}.csv").open("w", newline="") as fh:
+    with (RESULTS_DIR / f"{ticket}{suffix}.csv").open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=row.keys())
         writer.writeheader()
         writer.writerow(row)
@@ -192,28 +201,38 @@ def run_ticket(ticket: str, patches_dir: Path, ai: bool) -> dict | None:
     return row
 
 # ─────────── merge everything ────────────────────────────────
-def merge_results() -> None:
+def merge_results(label: str = "") -> None:
+    suffix = f"__{label}" if label else ""
+    merged_csv = PROJECT_ROOT / f"test_results{suffix}.csv"
+
     rows: list[dict] = []
     fields: set[str] = set()
-    for f in RESULTS_DIR.glob("*.csv"):
-        if f.name == MERGED_CSV.name:
+
+    for f in RESULTS_DIR.glob(f"*{suffix}.csv"):
+        if f.name == merged_csv.name:
             continue
+        if not label and "__" in f.stem:
+            continue
+        if label and not f.stem.endswith(suffix):
+            continue
+
         for row in csv.DictReader(f.open()):
             rows.append(row)
             fields.update(row.keys())
+
     if rows:
-        def row_key(row: dict) -> int:
-            # Use ticket_num for sorting, fallback to -1
-            return ticket_num(row.get("ticket", ""))
+        def row_key(r: dict) -> int:
+            # Use ticket_num for sorting
+            return ticket_num(r.get("ticket", ""))
 
         rows.sort(key=row_key, reverse=True)       # descending order
-        with open(MERGED_CSV, "w", newline="") as out:
+        with open(merged_csv, "w", newline="") as out:
             writer = csv.DictWriter(out, fieldnames=sorted(fields))
             writer.writeheader()
             writer.writerows(rows)
-        print(f"\n📦  Merged results → {MERGED_CSV}")
+        print(f"\n📦  Merged results → {merged_csv}")
     else:
-        print("⚠️  No individual CSVs found – nothing merged.")
+        print(f"⚠️  No CSVs found for patch set '{label or 'default'}' – nothing merged.")
 
 # ─────────────────────────── CLI entry-point ─────────────────────────────
 def main() -> None:
@@ -228,6 +247,20 @@ def main() -> None:
     else:
         patches_dir = DEFAULT_PATCHES_DIR
 
+    # ───────── determine patch sets ───────────────────────────
+    def _has_patch_files(d: Path) -> bool:
+        return any(p.suffix.lower() in {".diff", ".patch"} for p in d.iterdir() if p.is_file())
+
+    if args.ai:
+        if _has_patch_files(patches_dir):
+            patch_sets = [patches_dir]
+        else:
+            patch_sets = [p for p in sorted(patches_dir.iterdir()) if p.is_dir()]
+            if not patch_sets:
+                sys.exit(f"❌  No patch files or subdirectories found in {patches_dir}")
+    else:
+        patch_sets = [patches_dir]
+
     # ────────── collect tickets ────────────────────────────────
     tickets: list[str] = []
     source_csv = CSV_FILE
@@ -237,13 +270,16 @@ def main() -> None:
             if t:
                 tickets.append(t)
 
-    for ticket in tickets:
-        try:
-            run_ticket(ticket, patches_dir, args.ai)
-        except Exception as exc:
-            print(f"⚠️  {ticket}: {exc}")
+    for pset in patch_sets:
+        label = pset.name if len(patch_sets) > 1 else ""
+        for ticket in tickets:
+            try:
+                run_ticket(ticket, pset, args.ai, label)
+            except Exception as exc:
+                print(f"⚠️  {ticket} ({label}): {exc}")
 
-    merge_results()
+        # merge results for this patch set
+        merge_results(label)
 
 if __name__ == "__main__":
     main()
