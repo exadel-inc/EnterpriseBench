@@ -6,9 +6,11 @@ store one CSV per ticket and finally merge everything into *test_results.csv*.
 Supports two modes:
   1) Default: process tickets from pr_states.csv
      and run each through 3_run_ticket_test.py.
-  2) --ai: **requires** --ai-patches-dir, reads a previous results CSV
-     (via --filter-csv), picks only those with neg_status FAIL and code_status PASS,
-     then invokes 3_run_ticket_test.py --ai using the new patches dir.
+  2) --ai: runs on tickets that use AI‑generated patches. If --ai-patches-dir
+     is omitted, patches are taken from the project‑root *patches_ai* directory.
+     It reads a previous results CSV (via --filter-csv), picks only those with
+     neg_status FAIL and code_status PASS, then invokes 3_run_ticket_test.py --ai
+     using the selected patches dir.
 
 When --ai and --ai-patches-dir point to a directory that *itself* contains
 multiple sub‑directories (each holding .diff/.patch files), the script now
@@ -38,7 +40,7 @@ parser.add_argument("--java-major", type=int, metavar="N",
 mode.add_argument("--ai", action="store_true",
                   help="run tests on tickets that use AI-generated patches")
 parser.add_argument("--ai-patches-dir", type=Path,
-                    help="(ai) directory of non_test.diff files (required with --ai)")
+                    help="(ai) directory containing patch files (defaults to 'patches_ai')")
 args = parser.parse_args()
 
 PROJECT_ROOT = Path(args.project_root or Path(__file__).parent).expanduser().resolve()
@@ -46,6 +48,7 @@ PROJECT_ROOT = Path(args.project_root or Path(__file__).parent).expanduser().res
 # ───────────────────────── settings ──────────────────────────
 CSV_FILE            = PROJECT_ROOT / "pr_states.csv"
 DEFAULT_PATCHES_DIR = PROJECT_ROOT / "patches_pos"
+AI_PATCHES_DIR      = PROJECT_ROOT / "patches_ai"    # default folder for AI patches
 SCRIPT              = "3_run_ticket_test.py"
 RESULTS_DIR         = PROJECT_ROOT / "results"
 LOGS_DIR            = RESULTS_DIR / "logs"
@@ -236,14 +239,14 @@ def merge_results(label: str = "") -> None:
 
 # ─────────────────────────── CLI entry-point ─────────────────────────────
 def main() -> None:
-    # validate ai arguments
+    # ──────── determine base patches directory ──────────────
     if args.ai:
-        if not args.ai_patches_dir:
-            sys.exit("❌  --ai-patches-dir is required when using --ai")
-        patches_dir = Path(args.ai_patches_dir)
-        # If the user passed a *relative* path, resolve it under PROJECT_ROOT
-        if not patches_dir.is_absolute():
-            patches_dir = PROJECT_ROOT / patches_dir
+        if args.ai_patches_dir:
+            patches_dir = Path(args.ai_patches_dir)
+            if not patches_dir.is_absolute():
+                patches_dir = PROJECT_ROOT / patches_dir
+        else:
+            patches_dir = AI_PATCHES_DIR
     else:
         patches_dir = DEFAULT_PATCHES_DIR
 
