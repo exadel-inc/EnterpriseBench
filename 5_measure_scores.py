@@ -13,8 +13,8 @@ import sys
 from pathlib import Path
 import pandas as pd
 
-COL_STATUS  = "code_status"
-COL_APPLIED = "code_applied"
+CODE_STATUS  = "code_status"
+CODE_APPLIED = "code_applied"
 NEG_APPLIED = "neg_applied"
 
 
@@ -25,7 +25,7 @@ def pass_and_applied_rate(csv_path: Path) -> float | None:
         print(f"Skipping {csv_path.name}: could not read ({exc})", file=sys.stderr)
         return None
 
-    missing = [c for c in (COL_STATUS, COL_APPLIED, NEG_APPLIED) if c not in df.columns]
+    missing = [c for c in (CODE_STATUS, CODE_APPLIED, NEG_APPLIED) if c not in df.columns]
     if missing:
         print(f"Skipping {csv_path.name}: missing column(s) {', '.join(missing)}", file=sys.stderr)
         return None
@@ -35,19 +35,29 @@ def pass_and_applied_rate(csv_path: Path) -> float | None:
         print(f"Skipping {csv_path.name}: empty file", file=sys.stderr)
         return None
 
-    status_pass      = df[COL_STATUS].astype(str).str.upper() == "PASS"
-    applied_true     = df[COL_APPLIED].astype(str).str.strip().str.upper() == "TRUE"
+    status_pass      = df[CODE_STATUS].astype(str).str.upper() == "PASS"
+    applied_true     = df[CODE_APPLIED].astype(str).str.strip().str.upper() == "TRUE"
     neg_applied_true = df[NEG_APPLIED].astype(str).str.strip().str.upper() == "TRUE"
     passes           = (status_pass & applied_true & neg_applied_true).sum()
 
     # Hard-coded totals for the “special-case” files
     stem = csv_path.stem
-    if 'CF' in stem:
-        total = 53
-    elif 'DMB' in stem:
-        total = 43
-    elif 'EAK' in stem:
-        total = 51
+    s = stem.upper()
+    classic_totals = {
+        'CF': 10,
+        'DMB': 3,
+        'EAK': 20,
+    }
+    tdd_totals = {
+        'CF': 53,
+        'DMB': 43,
+        'EAK': 51,
+    }
+    totals = classic_totals if 'CLASSIC' in s else tdd_totals
+    for key, val in totals.items():
+        if key in s:
+            total = val
+            break
 
     return passes / total
 
@@ -64,7 +74,7 @@ def main() -> None:
 
     results: list[tuple[str, float]] = []
 
-    for csv_path in folder.glob("*.csv"):
+    for csv_path in folder.glob("test_results*.csv"):
         score = pass_and_applied_rate(csv_path)
         if score is not None:
             results.append((csv_path.name, score))
@@ -77,7 +87,7 @@ def main() -> None:
 
     for filename, score in results:
         # 6 chars wide gives room for “100.0%”
-        print(f"{filename[len('test_results_PATCHES_'):]:<{max_name_len}}  {score:>6.1%}")
+        print(f"{filename[len('test_results-'):]:<{max_name_len}}  {score:>6.1%}")
 
 
 if __name__ == "__main__":

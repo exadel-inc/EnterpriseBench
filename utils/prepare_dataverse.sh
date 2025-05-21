@@ -14,80 +14,20 @@
 #        • Unpacks the main repo zip (the one **without** “-mock”) → project_repo/
 #
 
+
 # Prerequisites: Bash ≥ 4 and “unzip” installed.
 # ------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# Helper: run commands with sudo if available and not root
 maybe_sudo() {
-  if [[ $EUID -ne 0 ]]; then
+  if command -v sudo >/dev/null 2>&1 && [[ $EUID -ne 0 ]]; then
     sudo "$@"
   else
     "$@"
   fi
 }
 
-# Ensure 'unzip' is present (attempt to install if missing)
-ensure_unzip() {
-  if ! command -v unzip >/dev/null 2>&1; then
-    printf "▶ 'unzip' not found. Attempting to install…\n"
-    if command -v apt-get >/dev/null 2>&1; then
-      maybe_sudo apt-get update -y && maybe_sudo apt-get install -y unzip
-    elif command -v dnf >/dev/null 2>&1; then
-      maybe_sudo dnf install -y unzip
-    elif command -v pacman >/dev/null 2>&1; then
-      maybe_sudo pacman -Sy --noconfirm unzip
-    elif command -v brew >/dev/null 2>&1; then
-      maybe_sudo brew install unzip
-    else
-      printf "❌  Could not detect package manager. Please install 'unzip' manually.\n" >&2
-      exit 1
-    fi
-  fi
-}
-# ------------------------------------------------------------------------------
-# Ensure 'mvn' (Apache Maven) is present (attempt to install if missing)
-ensure_maven() {
-  if ! command -v mvn >/dev/null 2>&1; then
-    printf "▶ 'mvn' not found. Attempting to install…\n"
-    # Install Maven 3.6.3 manually
-    mkdir -p /opt
-    curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.6.3/binaries/apache-maven-3.6.3-bin.tar.gz | tar -xz -C /opt
-    maybe_sudo ln -s /opt/apache-maven-3.6.3 /opt/maven
-    maybe_sudo ln -s /opt/maven/bin/mvn /usr/bin/mvn
-  fi
-}
-
-ensure_unzip
-ensure_maven
-# ------------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Ensure Java SDKs (8, 11, 17) are present
-ensure_java() {
-  if command -v javac >/dev/null 2>&1; then
-    # Check for specific versions; install missing ones
-    MISSING=()
-    for v in 8 11 17; do
-      if ! update-java-alternatives -l 2>/dev/null | grep -q "java-${v}-openjdk"; then
-        MISSING+=("openjdk-${v}-jdk")
-      fi
-    done
-    if (( ${#MISSING[@]} )); then
-      printf "▶ Installing missing JDKs: %s\n" "${MISSING[*]}"
-      maybe_sudo apt-get update -y && maybe_sudo apt-get install -y "${MISSING[@]}"
-    fi
-  elif command -v apt-get >/dev/null 2>&1; then
-    maybe_sudo apt-get update -y && maybe_sudo apt-get install -y openjdk-8-jdk openjdk-11-jdk openjdk-17-jdk
-  elif command -v dnf >/dev/null 2>&1; then
-    maybe_sudo dnf install -y java-1.8.0-openjdk-devel java-11-openjdk-devel java-17-openjdk-devel
-  elif command -v pacman >/dev/null 2>&1; then
-    maybe_sudo pacman -Sy --noconfirm jdk8-openjdk jdk11-openjdk jdk17-openjdk
-  elif command -v brew >/dev/null 2>&1; then
-    maybe_sudo brew install openjdk@8 openjdk@11 openjdk@17
-  else
-    printf "❌  Could not detect package manager to install JDKs.\n" >&2
-    exit 1
-  fi
-}
-ensure_java
-# ---------------------------------------------------------------------------
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Optional auto‑download of the dataset archive
@@ -135,8 +75,14 @@ if [[ $INPUT == *.zip ]]; then
     exit 0
   else
     printf "▶ Unzipping %s to %s/\n" "$INPUT" "$ROOT_DIR"
-    rm -rf "$ROOT_DIR"
-    mkdir -p "$ROOT_DIR"
+    # Clear existing contents without removing mount point
+    printf "▶ Clearing contents of %s/\n" "$ROOT_DIR"
+    if mountpoint -q "$ROOT_DIR"; then
+      rm -rf "$ROOT_DIR"/* || true
+    else
+      rm -rf "$ROOT_DIR"
+      mkdir -p "$ROOT_DIR"
+    fi
     unzip -q "$INPUT" -d "$ROOT_DIR"
   fi
 elif [[ -d $INPUT ]]; then
