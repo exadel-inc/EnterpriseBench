@@ -1,0 +1,4 @@
+.idea/
+# Ignore Dataverse archive and extracted directory
+dataverse_files.zip
+dataverse_files/
