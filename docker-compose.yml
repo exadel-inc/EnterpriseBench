@@ -1,0 +1,66 @@
+# -------------------------------------------------------------------
+# Base configuration applied to every service via YAML anchor
+x-bench-base: &bench_base
+#  image: enterprisebench:latest          # comment out if you prefer to build each time
+  build: .
+  # build:
+  #   context: .
+  #   dockerfile: Dockerfile
+  working_dir: /workspace/EnterpriseBench
+  volumes:
+    # Host‑side folder that surfaces inside the container. Everything
+    # you put here is instantly visible from Finder.
+    - ./dataverse_files:/workspace/EnterpriseBench/dataverse_files
+  tty: true
+  stdin_open: true
+  environment:
+    # Unbuffered output for nicer log streaming
+    - PYTHONUNBUFFERED=1
+
+services:
+  # -----------------------------------------------------------------
+  # Prepare Dataverse dataset using local ZIP
+  prepare_dataverse_local:
+    <<: *bench_base
+    volumes:
+      - ./dataverse_files:/workspace/EnterpriseBench/dataverse_files
+      - ./dataverse_files.zip:/workspace/EnterpriseBench/dataverse_files.zip:ro
+    command: bash -c "./utils/prepare_dataverse.sh && echo 'Dataset ready (local).'"
+
+  # -----------------------------------------------------------------
+  # Prepare Dataverse dataset by downloading ZIP
+  prepare_dataverse_remote:
+    <<: *bench_base
+    volumes:
+      - ./dataverse_files:/workspace/EnterpriseBench/dataverse_files
+    command: bash -c "./utils/prepare_dataverse.sh && echo 'Dataset ready (remote).'"
+
+  # -----------------------------------------------------------------
+  # 1) Interactive dev shell
+  shell:
+    <<: *bench_base
+    command: bash          # drop into a shell
+
+  # -----------------------------------------------------------------
+  # 2a) Run the golden benchmark (without AI patches)
+  golden:
+    <<: *bench_base
+    entrypoint: ["python3", "4_run_all_tickets.py"]
+
+  # -----------------------------------------------------------------
+  # 2b) Run the full AI‑patch benchmark
+  ai:
+    <<: *bench_base
+    entrypoint: ["python3", "4_run_all_tickets.py", "--ai"]
+
+  # -----------------------------------------------------------------
+  # 2c) Run ticket test script
+  ticket:
+    <<: *bench_base
+    entrypoint: ["python3", "3_run_ticket_test.py"]
+
+  # -----------------------------------------------------------------
+  # 3) Summarise results (measure scores)
+  scores:
+    <<: *bench_base
+    entrypoint: ["python3", "5_measure_scores.py"]
