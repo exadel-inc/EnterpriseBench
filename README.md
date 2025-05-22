@@ -10,9 +10,8 @@ We present **EnterpriseBench**, a new commercially grounded benchmark designed t
 2. [Prerequisites](#prerequisites)
 3. [Dataset Preparation](#dataset-preparation)
 4. [Running the Benchmark](#running-the-benchmark)
-5. [Output & Results](#output--results)
-6. [Troubleshooting & FAQ](#troubleshooting--faq)
-7. [License](#license)
+5. [Troubleshooting & FAQ](#troubleshooting--faq)
+6. [License](#license)
 
 ---
 
@@ -44,14 +43,17 @@ $ cd EnterpriseBench
 
 ## Dataset Preparation
 
-### Automatic script setup (optional)
+### Automatic setup (recommended)
 
-> 🗂️  If you’d rather automate these steps, simply run `install_dependencies.sh` to install required system dependencies
-> and `prepare_dataverse.sh` to download the Harvard Dataverse archive if needed, create the correct folder layout and rename/unpack everything exactly as required.
+> 🗂️  Simply run `utils/install_dependencies.sh` to install required system dependencies
+> and `utils/prepare_dataverse.sh` to download the Harvard Dataverse archive if needed, which creates the corrects folder layout and renames/unpacks everything exactly as required.
 
 The `install_dependencies.sh` script will:
-
-1. Install **unzip**, **Maven** and Java SDK 8 / 11 / 17 if they are missing (Ubuntu/Debian‑based systems only; other distros print a hint).
+1. Ensure **bash**, **curl**, **git**, and **unzip** are installed.
+2. Install **Apache Maven 3.6.3** if `mvn` is missing.
+3. Install Java SDKs 8, 11, and 17 (on Ubuntu/Debian; other distros print a hint).
+4. Ensure **pip3** is available (installing `python3-pip` if missing).
+5. Install the **pandas** Python package.
 
 The `prepare_dataverse.sh` script will:
 1. Download the Harvard Dataverse archive (DOI [10.7910/DVN/S4WOTJ](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/S4WOTJ)) if `dataverse_files.zip` is not already present.
@@ -74,6 +76,7 @@ EnterpriseBench expects the following artefacts for **every** benchmark run:
 2. **`pr_states.csv`** – the mapping between issue/ticket IDs and the commit SHA(s) that resolved them.
 3. **`project_repo`** – the full Git history of the benchmark project.
 4. **`patches_neg/`** – *negative* git diff patches.
+5. **`patches_ai/`** – *AI agent* git diff patches (default; can be overridden via `--ai-patches-dir`).
 
 > 🗂️  Rename / copy your dataset file to **`pr_states.csv`** (e.g. `dataset_CF_anonymized.csv → pr_states.csv`).  The scripts look for that exact filename by default.
 
@@ -86,35 +89,56 @@ project_root/
 ├── patches_neg/
 │   ├── <ticket1>_non_test.diff
 │   └── ...
+├── patches_ai/
+│   ├── <patch_set1>/
+│   │   ├── <ticket1>_non_test.diff
+│   │   └── ...
+│   └── <patch_set2>/
+│       ├── <ticket1>_non_test.diff
+│       └── ...
 ```
 
 ---
 
 ## Running the Benchmark
 
-`4_run_all_tickets.py` processes *every* row in `pr_states.csv`
-
 ```bash
-# Run the script for AI agent patches
-$ python3 4_run_all_tickets.py --ai --ai-patches-dir /path/to/ai_patches --project_root /path/to/benchmark/project_root
+$ python3 4_run_all_tickets.py --project-root dataverse_files/CompreFace
 ```
 
-`5_measure_scores.py` is a helper script available to summarize and display results from benchmark runs.
-
-```bash
-# Summarize and display results from benchmark runs
-$ python3 5_measure_scores.py /path/to/benchmark/project_root
-```
-
-#### Examples with the public *dataverse_files/* dataset
+### AI patches
 
 The following commands apply your AI‑generated patch sets to each of the three benchmark projects that ship in the Harvard Dataverse archive.  
 Adjust the `--ai-patches-dir` argument to point at the directory that contains your `<ticket>_non_test.diff` files. If `--ai-patches-dir` is omitted, the script defaults to the `patches_ai` directory within the project root. The script supports multiple AI patch sets. If the provided AI patch directory contains subfolders, each is treated as a distinct patch set and processed separately.
 
 ```bash
+$ python3 4_run_all_tickets.py --ai --project-root dataverse_files/CompreFace
+```
+
+### Golden patches
+
+Place the golden patches in the `patches_pos/` directory under the project root (e.g., `dataverse_files/CompreFace/patches_pos`).
+
+### Single patch
+
+```bash
+$ python3 3_run_ticket_test.py MM-62925 patches_pos/MM-62925_non_test.diff
+```
+
+### Measure scores
+
+Results from each run are saved in the `test_results.csv` CSV file and in the `results/` directory. This is a helper script to summarize and display results from benchmark runs.
+
+```bash
+$ python3 5_measure_scores.py dataverse_files/CompreFace
+```
+
+#### Examples with the public *dataverse_files/* dataset
+
+```bash
 # 1) AuthoringToolKit — this repo must be built with Java 8
 python3 4_run_all_tickets.py \
-  --project-root ./dataverse_files/AuthoringToolKit \
+  --project-root dataverse_files/AuthoringToolKit \
   --java-major 8 \
   --ai \
   --ai-patches-dir PATCHES_EAK_TDD_DEEPSEEK_mSWE_AGENT_CL2
@@ -123,7 +147,7 @@ python3 4_run_all_tickets.py \
 ```bash
 # 2) CompreFace
 python3 4_run_all_tickets.py \
-  --project-root ./dataverse_files/CompreFace \
+  --project-root dataverse_files/CompreFace \
   --ai \
   --ai-patches-dir PATCHES_CF_classic_GPT_4o_MINI_mSWE_AGENT_CL_1
 ```
@@ -131,7 +155,7 @@ python3 4_run_all_tickets.py \
 ```bash
 # 3) DynamicMailboxes
 python3 4_run_all_tickets.py \
-  --project-root ./dataverse_files/DynamicMailboxes \
+  --project-root dataverse_files/DynamicMailboxes \
   --ai \
   --ai-patches-dir PATCHES_DMB_classic_GPT_4o_MINI_mSWE_AGENT_CL_1
 ```
@@ -150,20 +174,21 @@ python3 4_run_all_tickets.py \
 
 #### 4_run_all_tickets.py
 
-| Flag | Purpose | Default |
+| Flag | Purpose                                                                                                                                                 | Default                     |
 |------|---------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------|
-| `--ai` | Run only the AI‑patch stage (skips base + merge) | off |
+| `--ai` | Run only the AI‑patch stage (skips base + merge)                                                                                                        | off                         |
 | `--ai-patches-dir PATH` | Directory containing `<ticket>_non_test.diff` files. If the flag is omitted, the script defaults to the `patches_ai` directory within the project root. | `patches_ai` project folder |
-| `--project-root PATH` | Root of the benchmark project | script’s folder |
-| `--java-major N` | Force Java major version (e.g., 8, 17) | highest JDK found |
+| `--project-root PATH` | Root of the benchmark project                                                                                                                           | script’s folder             |
+| `--java-major N` | Force Java major version (e.g., 8, 17)                                                                                                                  | highest JDK found           |
+
+#### 5_measure_scores.py
+
+| Argument         | Purpose                                                      | Default    |
+|------------------|--------------------------------------------------------------|------------|
+| `<folder_path>`  | Directory containing CSV files to summarize and display       | required   |
+| `-h`, `--help`   | Show the help message                                         | N/A        |
 
 All parameters are documented via `-h/--help`.
-
----
-
-## Output & Results
-
-Results are written to `results/` (created automatically) as JSON and CSV summaries which you can post‑process.
 
 ---
 
