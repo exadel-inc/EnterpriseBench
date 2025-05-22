@@ -97,6 +97,8 @@ ensure_unzip() {
       exit 1
     fi
   fi
+  # Mark all directories safe for Git
+  git config --global --add safe.directory '*'
 }
 
 # ------------------------------------------------------------------------------

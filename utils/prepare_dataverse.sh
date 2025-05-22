@@ -70,24 +70,24 @@ fi
 # 1. Unzip the top‑level archive only if the target directory is missing or empty
 if [[ $INPUT == *.zip ]]; then
   ROOT_DIR=${INPUT%.zip}       # strip trailing “.zip”
-  if [[ -d $ROOT_DIR && $(ls -A "$ROOT_DIR" 2>/dev/null) ]]; then
+  # Check for entries that are neither dotfiles nor macOS metadata (start with . or _)
+  non_hidden=( "$ROOT_DIR"/[!._]* )
+  if [[ -d $ROOT_DIR && ${#non_hidden[@]} -gt 0 ]]; then
     printf "▶ %s already exists – skipping all extraction & rename steps.\n" "$ROOT_DIR"
     exit 0
   else
     printf "▶ Unzipping %s to %s/\n" "$INPUT" "$ROOT_DIR"
     # Clear existing contents without removing mount point
     printf "▶ Clearing contents of %s/\n" "$ROOT_DIR"
-    if mountpoint -q "$ROOT_DIR"; then
-      rm -rf "$ROOT_DIR"/* || true
-    else
-      rm -rf "$ROOT_DIR"
-      mkdir -p "$ROOT_DIR"
-    fi
+    # Safely remove all files inside the directory without deleting the directory itself
+    rm -rf "$ROOT_DIR"/* "$ROOT_DIR"/.[!.]* 2>/dev/null || true
     unzip -q "$INPUT" -d "$ROOT_DIR"
   fi
 elif [[ -d $INPUT ]]; then
   ROOT_DIR=$INPUT
-  if [[ $(ls -A "$ROOT_DIR" 2>/dev/null) ]]; then
+  # Check for entries that are neither dotfiles nor macOS metadata (start with . or _)
+  non_hidden=( "$ROOT_DIR"/[!._]* )
+  if [[ ${#non_hidden[@]} -gt 0 ]]; then
     printf "▶ %s already exists – skipping all extraction & rename steps.\n" "$ROOT_DIR"
     exit 0
   fi
@@ -137,6 +137,11 @@ for PROJECT_DIR in "$ROOT_DIR"/*/; do
     done
   done
 
+  # 3b. Ensure an empty patches_ai directory exists
+  if [[ ! -d patches_ai ]]; then
+    mkdir -p patches_ai
+  fi
+
   # 4. Unzip main project repo (skip *-mock.zip and patch archives)
   for ZIP in *.zip; do
     [[ $ZIP == *-mock.zip ]] && continue
@@ -159,6 +164,8 @@ for PROJECT_DIR in "$ROOT_DIR"/*/; do
     fi
   done
 
+  # Mark this unpacked repo as safe for Git
+  git config --global --add safe.directory "$(pwd)/project_repo"
   popd >/dev/null
 done
 

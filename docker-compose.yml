@@ -31,8 +31,6 @@ services:
   # Prepare Dataverse dataset by downloading ZIP
   prepare_dataverse_remote:
     <<: *bench_base
-    volumes:
-      - ./dataverse_files:/workspace/EnterpriseBench/dataverse_files
     command: bash -c "./utils/prepare_dataverse.sh && echo 'Dataset ready (remote).'"
 
   # -----------------------------------------------------------------
