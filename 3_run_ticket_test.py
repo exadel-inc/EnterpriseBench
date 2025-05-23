@@ -7,7 +7,7 @@ Base  ➜  Merge  ➜  (merge + neg-patch)  ➜  (merge + neg-patch + code-patch
 Only tests that are *green* on both base & merge influence the verdict on
 negative / code patches (skip-list logic).
 The skip list for each ticket is stored persistently in `pr_states.csv`
-(column `skip_tests`).
+(column `skipped_tests`).
 
 Every Maven run is logged to  mvn-logs/<TICKET>_<stage>_<timestamp>.log
 
@@ -134,7 +134,7 @@ def red_tests() -> set[tuple[str,str]]:
 def write_skip(b: set[tuple[str, str]]):
     """
     Persist the union of red tests as a comma‑separated list in the
-    `skip_tests` column of pr_states.csv (one row per ticket).
+    `skipped_tests` column of pr_states.csv (one row per ticket).
     The column is created automatically if missing.
     """
     # read entire CSV
@@ -146,13 +146,13 @@ def write_skip(b: set[tuple[str, str]]):
             rows.append(r)
 
     # ensure the column exists
-    if "skip_tests" not in fieldnames:
-        fieldnames.append("skip_tests")
+    if "skipped_tests" not in fieldnames:
+        fieldnames.append("skipped_tests")
 
     # update the row for this ticket
     for r in rows:
         if r["ticket"] == TICKET:
-            r["skip_tests"] = ",".join(f"{c}#{m}" for c, m in sorted(b))
+            r["skipped_tests"] = ",".join(f"{c}#{m}" for c, m in sorted(b))
             break
     else:
         sys.exit(f"❌ ticket {TICKET} not found in {PR_STATE}")
@@ -173,38 +173,45 @@ def load_skip() -> set[tuple[str, str]]:
         for r in csv.DictReader(fh):
             if r["ticket"] != TICKET:
                 continue
-            raw_items = (r.get("skip_tests", "") or "").split(",")
+
+            # Allow both comma‑ and newline‑separated entries
+            raw_field = (r.get("skipped_tests", "") or "")
+            fragments = raw_field.replace("\n", ",").split(",")
+
             out: set[tuple[str, str]] = set()
-            for raw in raw_items:
-                raw = raw.strip()
-                # ignore placeholder comments and malformed entries
-                if not raw or raw.startswith("#") or "#" not in raw:
+            for frag in fragments:
+                frag = frag.strip()
+                # ignore empty fragments, comments, malformed bits
+                if not frag or frag.startswith("#") or "#" not in frag:
                     continue
-                c, m = raw.split("#", 1)
+                c, m = frag.split("#", 1)
                 out.add((c, m))
-            return out  # empty set means "nothing to skip"
-        sys.exit(f"❌ ticket {TICKET} not found in {PR_STATE}")
+            return out          # may be an empty set
+
+    sys.exit(f"❌ ticket {TICKET} not found in {PR_STATE}")
 
 def dtest() -> str | None:
     """
     Build the -Dtest exclusion filter based on the skip list already
     recorded in pr_states.csv. Returns None if no skip list yet.
     """
-    skip: set[tuple[str, str]] = set()
+    # Build the Maven -Dtest filter from the CSV skip list
     with PR_STATE.open(newline="", encoding="utf-8") as fh:
         for r in csv.DictReader(fh):
-            if r["ticket"] == TICKET:
-                items = (r.get("skip_tests", "") or "").split(",")
-                skip = set()
-                for raw in items:
-                    raw = raw.strip()
-                    if raw and "#" in raw:
-                        c, m = raw.split("#", 1)
-                        skip.add((c, m))
-                break
-    if not skip:
-        return None
-    return "-Dtest=" + ",".join(["*"] + [f"!{c}#{m}" for c, m in sorted(skip)])
+            if r["ticket"] != TICKET:
+                continue
+
+            raw_field = (r.get("skipped_tests", "") or "")
+            fragments = [f.strip() for f in raw_field.replace("\n", ",").split(",") if f.strip()]
+
+            # keep only well‑formed “Class#method” fragments that aren’t comments
+            pats = [frag for frag in fragments if "#" in frag and not frag.startswith("#")]
+            if not pats:
+                return None
+            return "-Dtest=" + ",".join(["*"] + [f"!{p}" for p in sorted(pats)])
+
+    return None
+
 
 # ────────── Maven runner ──────────────────────────────────────
 def run(stage: str) -> tuple[int, dict[str, int]]:
